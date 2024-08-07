@@ -1,0 +1,13 @@
+#!/bin/sh
+#$ -q UI-GPU
+#$ -l ngpus=4
+#$ -cwd
+#$ -N PTV_NN
+#$ -e /Users/starman/pytorch_multinode/
+#$ -o /Users/starman/pytorch_multinode/
+
+module purge
+module restore python_torch_nn
+cd /Users/starman/pytorch_multinode/.
+
+python run_training.py 1000 20 --batch_size=51948 > log.out
