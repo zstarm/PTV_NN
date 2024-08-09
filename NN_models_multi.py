@@ -11,7 +11,7 @@ from torch.distributed import init_process_group
 import os
 
 def loss_mse(y_pred, y):
-    return torch.mean((y-y_pred)**2 ) #+ torch.mean((y[0]-y_pred[0])**2)  #add extra weight for initial condition
+    return torch.mean((y-y_pred)**2 )  #add extra weight for initial condition
 
 
 def ddp_setup(rank, world_size):
@@ -95,8 +95,110 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
     )
 
 
+#CUSTOM LAYERS
+class fourier_basis_function(nn.Module):
+    def __init__(self, size_in: int, num_terms: int, phase_lag: bool = True,
+                 device=None, dtype=None) -> None:
+        factory_kwargs = {'device': device, 'dtype':dtype}
+        super().__init__()
+        if (num_terms % 2):
+            print("Odd number of terms. Using N-1 terms instead")
+            num_terms = num_terms-1
+        
+        self.in_features = size_in
+        self.out_features = num_terms
+        self.freq = nn.Parameter(torch.empty((2, math.floor(num_terms/2)), **factory_kwargs))
+        self.amp = nn.Parameter(torch.empty((1,num_terms * size_in), **factory_kwargs))
+        if phase_lag:
+            self.phase = nn.Parameter(torch.empty((2, size_in * math.floor(num_terms/2)), **factory_kwargs))
+        else:
+            self.register_parameter('phase', None)
+
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        with torch.no_grad():
+            for t in range(0,math.floor(self.out_features/2)):
+                self.freq[0,t] = nn.Parameter(torch.tensor(2 * t * math.pi))
+                self.freq[1,t] = nn.Parameter(torch.tensor(2 * (t+1) * math.pi))
+        
+        self.freq.requires_grad = False
+        
+        nn.init.kaiming_uniform_(self.amp, a=math.sqrt(5))
+        #nn.init.uniform_(self.amp,1,1)
+
+        if self.phase is not None:
+            fan_in, _  = nn.init._calculate_fan_in_and_fan_out(self.amp)
+            bound = 1/math.sqrt(fan_in) if fan_in > 0 else 0
+            nn.init.uniform_(self.phase, -bound, bound)
+            #nn.init.uniform_(self.phase,1,1)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if(input.size(dim=1) != self.in_features):
+            print("Incorrect Number of features in input")
+            return None
+        else:
+            for i in range(0, self.in_features):
+                cos_tmp = torch.mm(input[:,i].reshape(-1,1), self.freq[0,:].reshape(1,-1))
+                sin_tmp = torch.mm(input[:,i].reshape(-1,1), self.freq[0,:].reshape(1,-1))
+                if i > 0:
+                    cos_inner = torch.cat((cos_inner, cos_tmp), dim = 1)
+                    sin_inner = torch.cat((sin_inner, sin_tmp), dim = 1)
+                else:
+                    cos_inner = cos_tmp
+                    sin_inner = sin_tmp
+
+            del cos_tmp
+            del sin_tmp
+            if self.phase is not None:
+                cos_inner.add_(self.phase[0,:])
+                sin_inner.add_(self.phase[1,:])
+
+        return torch.mul(torch.cat((torch.cos(cos_inner), torch.sin(sin_inner)), dim = 1), self.amp)
+        
+class radial_basis_function(nn.Module):
+    def __init__(self, size_in: int, num_terms: int, sep: float = 0.5,
+                 device=None, dtype=None) -> None:
+        factory_kwargs = {'device': device, 'dtype':dtype}
+        super().__init__()
+        self.in_features = size_in
+        self.out_features = num_terms
+        self.N = num_terms - 1
+        self.l = 1 / (2*self.N*math.sqrt(-2*math.log(sep)))
+        self.weight = nn.Parameter(torch.empty((1,num_terms * size_in), **factory_kwargs))
+        self.shift = nn.Parameter(torch.empty((num_terms), **factory_kwargs)) 
+
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        #nn.init.uniform_(self.weight,1,1)
+        
+        with torch.no_grad():
+            for i in range(0,self.out_features):
+                self.shift[i] = nn.Parameter(torch.tensor(i/self.N))
+        
+        self.shift.requires_grad = False
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if(input.size(dim=1) != self.in_features):
+            print("Incorrect Number of features in input")
+            return None
+        else:
+            for i in range(0, self.out_features):
+                tmp = (torch.subtract(input, self.shift[i]))**2
+                if i > 0:
+                    a = torch.cat((a, tmp), dim = 1)
+                else:
+                    a = tmp
+
+            del tmp
+            #a = (torch.subtract(input, self.shift))**2
+            return torch.mul(torch.exp(-a/(2*(self.l)**2)), self.weight)
+
+
 #MODEL CLASS
-class PTV_NN_multi(nn.Module):
+class prev_PTV_NN_multi(nn.Module):
     def __init__(self, num_terms,num_hidden_layers,hidden_size):
         super().__init__()
         
@@ -130,7 +232,54 @@ class PTV_NN_multi(nn.Module):
         
         output = self.output_layer(x)
         return output
+
+class PTV_NN_multi(nn.Module):
+    def __init__(self, num_FBT: int, num_RBT: int, num_HL: int = 0, num_HLT: int = 8):
+        super().__init__()
+
+        self.fourier_layer = fourier_basis_function(1,num_FBT, False)
+        self.radial_layer = radial_basis_function(2, num_RBT, sep = 0.5) 
+        
+        if num_HL:
+            self.in_HL = nn.Linear(2*num_RBT + num_FBT, num_HLT)
+            self.hidden_layers = nn.ModuleList(
+                [nn.Linear(num_HLT, num_HLT) for _ in range(num_HL-1)]
+            )
+            self.output_layer = nn.Linear(num_HLT,3) 
+
+        else:
+            self.register_parameter = ('in_HL', None)
+            self.register_parameter = ('hidden_layers', None)
+
+            self.output_layer = nn.Linear(2*num_RBT + num_FBT, 3)
+
     
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        FT = self.fourier_layer(input[:,2].reshape(-1,1))
+        RT = self.radial_layer(input[:,0:2])
+
+        input = torch.cat((RT, FT), dim=1)
+
+        if self.in_HL is not None:
+            input = torch.tanh(self.in_HL(input))
+            for layer in self.hidden_layers:
+                input = torch.tanh(layer(input))
+
+        return self.output_layer(input)
+
+class test_FBF_layer(nn.Module):
+    def __init__(self, num_FBT: int):
+        super().__init__()
+
+        self.fourier_layer = fourier_basis_function(1,num_FBT, False)
+        self.output_layer = nn.Linear(num_FBT, 1)
+
+    
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        input = self.fourier_layer(input)
+        return self.output_layer(input)
+
+
 
 def scaleTensors(t):
     s = []
