@@ -14,7 +14,7 @@ def loss_mse(y_pred, y):
     return torch.mean((y-y_pred)**2 )  #add extra weight for initial condition
 
 
-def ddp_setup(rank, world_size):
+def ddp_setup():
     """
     Args:
         rank (_type_): unique identifer of each process
