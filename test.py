@@ -15,16 +15,23 @@ def closure():
     return loss
 
 
-x = np.linspace(0, 1, 500)
-xt = torch.from_numpy(x).reshape(-1,1)
-y = np.sin(2*math.pi*x) + 0.2*np.cos(2*math.pi*x/0.1)
-yt = torch.from_numpy(y).reshape(-1,1)
+x = np.linspace(0, 1, 200)
+t = np.linspace(0, 1, 200)
+
+xt = torch.empty((200*200, 2))
+yt = torch.empty(200*200,1)
+for i in range(0,200):
+    for j in range(0,200):
+        xt[j+(i*200),0] = x[i]
+        xt[j+(i*200),1] = t[j]
+        yt[j+(i*200),0] = np.sin(2*math.pi*x[i] - 2*math.pi*t[j]) + 0.2*np.cos(2*math.pi*x[i]/0.1)
+
 
 model = NN_mm.test_FBF_layer(22)
 
 optimizer = torch.optim.LBFGS(model.parameters())
 
-epochs = 500
+epochs = 75
 print("Start")
 
 for i in range(epochs):
@@ -35,8 +42,8 @@ print("Finish")
 with torch.no_grad():
     pred = model(xt)
 
-plt.plot(x, y, 'r')
-plt.plot(x, pred.numpy(), 'b')
+plt.plot(xt.numpy()[-200:,0], yt.numpy()[-200:,0], 'r')
+plt.plot(xt.numpy()[-200:,0], pred.numpy()[-200:,0], 'b')
 
 plt.show()
         

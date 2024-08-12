@@ -20,9 +20,9 @@ def ddp_setup(rank, world_size):
         rank (_type_): unique identifer of each process
         world_size (_type_): total number of processes
     """
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
-    init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    #os.environ["MASTER_ADDR"] = "localhost"
+    #os.environ["MASTER_PORT"] = "12355"
+    init_process_group(backend="nccl") #, rank=rank, world_size=world_size)
 
 class Trainer:
     def __init__(
@@ -30,15 +30,27 @@ class Trainer:
         model: torch.nn.Module,
         train_data: DataLoader,
         optimizer: torch.optim.Optimizer,
-        gpu_id: int,
         save_every: int, 
+        snapshot_path = str,
     ) -> None:
-        self.gpu_id = gpu_id
-        self.model = model.to(gpu_id)
-        self.model = DDP(self.model, device_ids=[self.gpu_id])
+        self.dev_id = int(os.environ["LOCAL_RANK"])
+        self.model = model.to(self.dev_id)
         self.train_data = train_data
         self.optimizer = optimizer
         self.save_every = save_every
+        self.epochs_run = 0
+        if(os.path.exists(snapshot_path):
+           print("Loading snapsho")
+           self._load_snapshot(snapshot_path)
+
+        self.model = DDP(self.model, device_ids=[self.dev_id])
+
+    def _load_snapshot(self, snapshot_path):
+           torch.load(snapshot_path)
+           self.model.load_state_dict(snapshot["MODEL_STATE"])
+           self.epochs_run = snapshot["EPOCHS_RUN"]
+           print(f"Resuming Training from snapshot at epoch {self.epochs_run}")
+        
 
     def _run_batch(self, source, targets):
         '''
@@ -64,14 +76,15 @@ class Trainer:
             targets = targets.to(self.gpu_id)
             self._run_batch(source, targets)
 
-    def _save_checkpoint(self, epoch):
-        ckp = self.model.module.state_dict()
-        PATH = "checkpoint.pt"
-        torch.save(ckp, PATH)
-        print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
+    def _save_snapshot(self, epoch):
+        snapshot = {}
+        shapshot["MODEL_STATE"]  = self.model.module.state_dict()
+        snapshot["EPOCHS_RUN"] = epoch
+        torch.save(snapshot, "snapshot.pt")
+        print(f"Epoch {epoch} | Training snapshot saved at snapshot.pt")
 
     def train(self, max_epochs: int):
-        for epoch in range(max_epochs):
+        for epoch in range(self.epochs_run, max_epochs):
             self._run_epoch(epoch)
             if self.gpu_id == 0 and epoch % self.save_every == 0:
                 self._save_checkpoint(epoch)
@@ -79,7 +92,7 @@ class Trainer:
 
 def load_train_objs():
     train_set = PTV_dataset("unfiltered4DPTV_velocity_subgrid_fourier_202815_042724.pth", "unfiltered4DPTV_features_subgrid_fourier_202815_042724.pth", "Training Data")  # load your dataset
-    model = PTV_NN_multi(111, 4, 250)  # load your model
+    model = PTV_NN_multi(222, 10, 3, 24)  # load your model
     optimizer = torch.optim.LBFGS(model.parameters(), lr=1, max_iter=25,tolerance_grad=1e-200, tolerance_change=1e-200)
     #optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
     return train_set, model, optimizer
@@ -271,14 +284,17 @@ class test_FBF_layer(nn.Module):
     def __init__(self, num_FBT: int):
         super().__init__()
 
-        self.fourier_layer = fourier_basis_function(1,num_FBT, False)
-        self.output_layer = nn.Linear(num_FBT, 1)
+        self.fourier_layer = fourier_basis_function(2,num_FBT, False)
+        self.layer1 = nn.Linear(2*num_FBT, 8)
+        self.layer2 = nn.Linear(8,8)
+        self.output_layer = nn.Linear(8, 1)
 
     
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         input = self.fourier_layer(input)
+        input = torch.tanh(self.layer1(input))
+        input = torch.tanh(self.layer2(input))
         return self.output_layer(input)
-
 
 
 def scaleTensors(t):
@@ -291,9 +307,6 @@ def scaleTensors(t):
         s.append(scale)
         t[:,i] /= scale
     return t,s
-
-
-
 
 
 def unscaleTensors(t,s):

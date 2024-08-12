@@ -1,6 +1,6 @@
 #!/bin/sh
 #$ -q UI-GPU
-#$ -l ngpus=4
+#$ -l ngpus=1
 #$ -cwd
 #$ -N PTV_NN
 #$ -e /Users/starman/pytorch_multinode/
@@ -10,4 +10,4 @@ module purge
 module restore python_torch_nn
 cd /Users/starman/pytorch_multinode/.
 
-python run_training.py 1000 20 --batch_size=51948 > log.out
+torchrun --standalone --nproc_per_node=1 run_training.py 1000 20 --batch_size=51948 > log.out
