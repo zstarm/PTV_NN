@@ -7,7 +7,7 @@ torch.set_default_dtype(torch.double)
 
 #from NN_models_multi import scaleTensors, unscaleTensors, gradScalings, write_data_file, fourier_transform_time
 def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt" ):
-    NN_mm.ddp_setup(rank, world_size)
+    NN_mm.ddp_setup()
     dataset, model, optimizer = NN_mm.load_train_objs()
     train_data = NN_mm.prepare_dataloader(dataset, batch_size)
     trainer = NN_mm.Trainer(model, train_data, optimizer, rank, save_every)
