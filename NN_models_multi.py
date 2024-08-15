@@ -14,7 +14,7 @@ def loss_mse(y_pred, y):
     return torch.mean((y-y_pred)**2 )  #add extra weight for initial condition
 
 
-def ddp_setup(device_type: str):
+def ddp_setup(device_type: str, net_inter: str):
     """
     Args:
         rank (_type_): unique identifer of each process
@@ -23,9 +23,12 @@ def ddp_setup(device_type: str):
     #os.environ["MASTER_ADDR"] = "localhost"
     #os.environ["MASTER_PORT"] = "12355"
     if device_type == 'gpu':
+        if net_inter:
+            os.environ["NCCL_SOCKET_IFNAME"] = net_inter  #CHANGE AS NEEDED
         init_process_group(backend='nccl')
     else:
-        #os.environ["GLOO_SOCKET_IFNAME"] = "en0" #CHANGE AS NEEDED
+        if net_inter:
+            os.environ["GLOO_SOCKET_IFNAME"] = net_inter #CHANGE AS NEEDED
         init_process_group(backend="gloo")
 
 class Trainer:
