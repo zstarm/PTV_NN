@@ -14,7 +14,7 @@ def loss_mse(y_pred, y):
     return torch.mean((y-y_pred)**2 )  #add extra weight for initial condition
 
 
-def ddp_setup():
+def ddp_setup(device_type: str):
     """
     Args:
         rank (_type_): unique identifer of each process
@@ -22,7 +22,10 @@ def ddp_setup():
     """
     #os.environ["MASTER_ADDR"] = "localhost"
     #os.environ["MASTER_PORT"] = "12355"
-    init_process_group(backend="nccl") #, rank=rank, world_size=world_size)
+    if device_type == 'GPU':
+        init_process_group(backend='nccl')
+    else:
+        init_process_group(backend="gloo")
 
 class Trainer:
     def __init__(
@@ -31,22 +34,34 @@ class Trainer:
         train_data: DataLoader,
         optimizer: torch.optim.Optimizer,
         save_every: int, 
-        snapshot_path = str,
+        snapshot_path: str,
+        device_type: str
     ) -> None:
+        if (device_type != 'CPU') and (device_type != 'GPU'):
+            print(f"DEVICE TYPE NOT RECOGNIZED ({device_type:}) ... Defaulting to CPU")
+            device_type = 'CPU'
+
+        self.dev_type = device_type
         self.dev_id = int(os.environ["LOCAL_RANK"])
-        self.model = model.to(self.dev_id)
+        if device_type == 'CPU':
+            self.model = model.to(f'cpu:{self.dev_id:}')
+        else:
+            self.model = model.to(self.dev_id)
         self.train_data = train_data
         self.optimizer = optimizer
         self.save_every = save_every
         self.epochs_run = 0
         if(os.path.exists(snapshot_path)):
-           print("Loading snapsho")
+           print("Loading snapshot")
            self._load_snapshot(snapshot_path)
 
-        self.model = DDP(self.model, device_ids=[self.dev_id])
+        if device_type == 'CPU':
+            self.model = DDP(self.model, device_ids=None)
+        else:
+            self.model = DDP(self.model, device_ids=[self.dev_id])
 
     def _load_snapshot(self, snapshot_path):
-           torch.load(snapshot_path)
+           snapshot = torch.load(snapshot_path)
            self.model.load_state_dict(snapshot["MODEL_STATE"])
            self.epochs_run = snapshot["EPOCHS_RUN"]
            print(f"Resuming Training from snapshot at epoch {self.epochs_run}")
@@ -70,15 +85,20 @@ class Trainer:
 
     def _run_epoch(self, epoch):
         b_sz = len(next(iter(self.train_data))[0])
-        print(f"[Device:{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
+        print(f"[Device:{self.dev_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         for source, targets in self.train_data:
-            source = source.to(self.gpu_id)
-            targets = targets.to(self.gpu_id)
+            if self.dev_type == 'CPU':
+                source = source.to(f'cpu:{self.dev_id:}')
+                targets = targets.to(f'cpu:{self.dev_id:}')
+            else:
+                source = source.to(self.dev_id)
+                targets = targets.to(self.dev_id)
+
             self._run_batch(source, targets)
 
     def _save_snapshot(self, epoch):
         snapshot = {}
-        shapshot["MODEL_STATE"]  = self.model.module.state_dict()
+        snapshot["MODEL_STATE"]  = self.model.module.state_dict()
         snapshot["EPOCHS_RUN"] = epoch
         torch.save(snapshot, "snapshot.pt")
         print(f"Epoch {epoch} | Training snapshot saved at snapshot.pt")
@@ -86,8 +106,8 @@ class Trainer:
     def train(self, max_epochs: int):
         for epoch in range(self.epochs_run, max_epochs):
             self._run_epoch(epoch)
-            if self.gpu_id == 0 and epoch % self.save_every == 0:
-                self._save_checkpoint(epoch)
+            if self.dev_id == 0 and epoch % self.save_every == 0:
+                self._save_snapshot(epoch)
 
 
 def load_train_objs():
