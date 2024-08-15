@@ -22,9 +22,10 @@ def ddp_setup(device_type: str):
     """
     #os.environ["MASTER_ADDR"] = "localhost"
     #os.environ["MASTER_PORT"] = "12355"
-    if device_type == 'GPU':
+    if device_type == 'gpu':
         init_process_group(backend='nccl')
     else:
+        os.environ["GLOO_SOCKET_IFNAME"] = "en0" #CHANGE AS NEEDED
         init_process_group(backend="gloo")
 
 class Trainer:
@@ -37,16 +38,14 @@ class Trainer:
         snapshot_path: str,
         device_type: str
     ) -> None:
-        if (device_type != 'CPU') and (device_type != 'GPU'):
-            print(f"DEVICE TYPE NOT RECOGNIZED ({device_type:}) ... Defaulting to CPU")
-            device_type = 'CPU'
+        if (device_type != 'cpu') and (device_type != 'gpu'):
+            print(f"DEVICE TYPE NOT RECOGNIZED ({device_type:}) ... Defaulting to cpu")
+            device_type = 'cpu'
 
         self.dev_type = device_type
         self.dev_id = int(os.environ["LOCAL_RANK"])
-        if device_type == 'CPU':
-            self.model = model.to(f'cpu:{self.dev_id:}')
-        else:
-            self.model = model.to(self.dev_id)
+        print(f'{self.dev_type}:{self.dev_id:}')
+        self.model = model.to(f'{self.dev_type}:{self.dev_id:}')
         self.train_data = train_data
         self.optimizer = optimizer
         self.save_every = save_every
@@ -54,8 +53,7 @@ class Trainer:
         if(os.path.exists(snapshot_path)):
            print("Loading snapshot")
            self._load_snapshot(snapshot_path)
-
-        if device_type == 'CPU':
+        if device_type == 'cpu':
             self.model = DDP(self.model, device_ids=None)
         else:
             self.model = DDP(self.model, device_ids=[self.dev_id])
@@ -87,13 +85,8 @@ class Trainer:
         b_sz = len(next(iter(self.train_data))[0])
         print(f"[Device:{self.dev_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         for source, targets in self.train_data:
-            if self.dev_type == 'CPU':
-                source = source.to(f'cpu:{self.dev_id:}')
-                targets = targets.to(f'cpu:{self.dev_id:}')
-            else:
-                source = source.to(self.dev_id)
-                targets = targets.to(self.dev_id)
-
+            source = source.to(f'{self.dev_type}:{self.dev_id:}')
+            targets = targets.to(f'{self.dev_type}:{self.dev_id:}')
             self._run_batch(source, targets)
 
     def _save_snapshot(self, epoch):
