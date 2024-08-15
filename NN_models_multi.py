@@ -25,7 +25,7 @@ def ddp_setup(device_type: str):
     if device_type == 'gpu':
         init_process_group(backend='nccl')
     else:
-        os.environ["GLOO_SOCKET_IFNAME"] = "en0" #CHANGE AS NEEDED
+        #os.environ["GLOO_SOCKET_IFNAME"] = "en0" #CHANGE AS NEEDED
         init_process_group(backend="gloo")
 
 class Trainer:
