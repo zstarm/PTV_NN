@@ -47,7 +47,7 @@ class Trainer:
 
         self.dev_type = device_type
         self.dev_id = int(os.environ["LOCAL_RANK"])
-        print(f'{self.dev_type}:{self.dev_id:}')
+        #print(f'{self.dev_type}:{self.dev_id:}')
         self.model = model.to(f'{self.dev_type}:{self.dev_id:}')
         self.train_data = train_data
         self.optimizer = optimizer

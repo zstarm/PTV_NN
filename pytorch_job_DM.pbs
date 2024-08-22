@@ -1,0 +1,16 @@
+#!/bin/sh
+#$ -M starman@uiowa.edu
+#$ -m be
+#$ -q UI-DEVELOP
+#$ -pe 128cpn 128
+#$ -l h_rt=00:30:00
+#$ -cwd
+#$ -N PTV_NN
+#$ -e /Users/starman/PTV_NN/hpc_output/
+#$ -o /Users/starman/PTV_NN/hpc_output/
+
+module purge
+module restore python_torch_nn
+cd /Users/starman/PTV_NN/.
+
+torchrun --nnodes=1 --nproc_per_node=cpu run_training.py 10000 20 --batch_size=811 > log.out
